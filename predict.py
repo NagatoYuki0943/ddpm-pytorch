@@ -14,7 +14,7 @@ if __name__ == "__main__":
         print("Generate_1x1_image")
         ddpm.generate_1x1_image(save_path_1x1)
         print("Generate_1x1_image Done")
-        
+
         print("Generate_5x5_image")
         ddpm.generate_5x5_image(save_path_5x5)
         print("Generate_5x5_image Done")

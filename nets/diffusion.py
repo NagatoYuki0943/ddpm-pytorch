@@ -15,7 +15,7 @@ def extract(a, t, x_shape):
 class EMA():
     def __init__(self, decay):
         self.decay = decay
-    
+
     def update_average(self, old, new):
         if old is None:
             return new
@@ -101,14 +101,14 @@ class GaussianDiffusion(nn.Module):
             raise ValueError("sample batch size different from length of given y")
 
         x = torch.randn(batch_size, self.img_channels, *self.img_size, device=device)
-        
+
         for t in range(self.num_timesteps - 1, -1, -1):
             t_batch = torch.tensor([t], device=device).repeat(batch_size)
             x = self.remove_noise(x, t_batch, y, use_ema)
 
             if t > 0:
                 x += extract(self.sigma, t_batch, x.shape) * torch.randn_like(x)
-        
+
         return x.cpu().detach()
 
     @torch.no_grad()
@@ -118,23 +118,23 @@ class GaussianDiffusion(nn.Module):
 
         x = torch.randn(batch_size, self.img_channels, *self.img_size, device=device)
         diffusion_sequence = [x.cpu().detach()]
-        
+
         for t in range(self.num_timesteps - 1, -1, -1):
             t_batch = torch.tensor([t], device=device).repeat(batch_size)
             x = self.remove_noise(x, t_batch, y, use_ema)
 
             if t > 0:
                 x += extract(self.sigma, t_batch, x.shape) * torch.randn_like(x)
-            
+
             diffusion_sequence.append(x.cpu().detach())
-        
+
         return diffusion_sequence
 
     def perturb_x(self, x, t, noise):
         return (
             extract(self.sqrt_alphas_cumprod, t,  x.shape) * x +
             extract(self.sqrt_one_minus_alphas_cumprod, t, x.shape) * noise
-        )   
+        )
 
     def get_losses(self, x, t, y):
         # x, noise [batch_size, 3, 64, 64]
@@ -157,25 +157,25 @@ class GaussianDiffusion(nn.Module):
             raise ValueError("image height does not match diffusion parameters")
         if w != self.img_size[0]:
             raise ValueError("image width does not match diffusion parameters")
-        
+
         t = torch.randint(0, self.num_timesteps, (b,), device=device)
         return self.get_losses(x, t, y)
 
 def generate_cosine_schedule(T, s=0.008):
     def f(t, T):
         return (np.cos((t / T + s) / (1 + s) * np.pi / 2)) ** 2
-    
+
     alphas = []
     f0 = f(0, T)
 
     for t in range(T + 1):
         alphas.append(f(t, T) / f0)
-    
+
     betas = []
 
     for t in range(1, T + 1):
         betas.append(min(1 - alphas[t] / alphas[t - 1], 0.999))
-    
+
     return np.array(betas)
 
 def generate_linear_schedule(T, low, high):

@@ -20,7 +20,7 @@ class DiffusionDataset(Dataset):
     def __getitem__(self, index):
         image   = Image.open(self.annotation_lines[index].split()[0])
         image   = cvtColor(image).resize([self.input_shape[1], self.input_shape[0]], Image.BICUBIC)
-        
+
         image   = np.array(image, dtype=np.float32)
         image   = np.transpose(preprocess_input(image), (2, 0, 1))
         return image

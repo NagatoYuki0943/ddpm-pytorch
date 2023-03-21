@@ -39,7 +39,7 @@ if __name__ == "__main__":
     #---------------------------------------------------------------------#
     fp16            = False
     #---------------------------------------------------------------------#
-    #   如果想要断点续练就将model_path设置成logs文件夹下已经训练的权值文件。 
+    #   如果想要断点续练就将model_path设置成logs文件夹下已经训练的权值文件。
     #   当model_path = ''的时候不加载整个模型的权值。
     #
     #   此处使用的是整个模型的权重，因此是在train.py进行加载的。
@@ -62,14 +62,14 @@ if __name__ == "__main__":
     #   设置后在训练时Diffusion的图像看不出来，需要在预测时看单张图像。
     #---------------------------------------------------------------------#
     input_shape     = (32, 32)
-    
+
     #------------------------------#
     #   训练参数设置
     #------------------------------#
     Init_Epoch      = 0
     Epoch           = 1000
     batch_size      = 64
-    
+
     #------------------------------------------------------------------#
     #   其它训练参数：学习率、优化器、学习率下降有关
     #------------------------------------------------------------------#
@@ -103,10 +103,10 @@ if __name__ == "__main__":
     #------------------------------------------------------------------#
     #   num_workers     用于设置是否使用多线程读取数据
     #                   开启后会加快数据读取速度，但是会占用更多内存
-    #                   内存较小的电脑可以设置为2或者0  
+    #                   内存较小的电脑可以设置为2或者0
     #------------------------------------------------------------------#
     num_workers         = 4
-    
+
     #------------------------------------------#
     #   获得图片路径
     #------------------------------------------#
@@ -160,7 +160,7 @@ if __name__ == "__main__":
         loss_history    = LossHistory(log_dir, [diffusion_model], input_shape=input_shape)
     else:
         loss_history    = None
-        
+
     #------------------------------------------------------------------#
     #   torch 1.2不支持amp，建议使用torch 1.7.1及以上正确使用fp16
     #   因此torch1.2这里显示"could not be resolve"
@@ -170,9 +170,9 @@ if __name__ == "__main__":
         scaler = GradScaler()
     else:
         scaler = None
-    
+
     diffusion_model_train = diffusion_model.train()
-    
+
     if Cuda:
         if distributed:
             diffusion_model_train = diffusion_model_train.cuda(local_rank)
@@ -204,12 +204,12 @@ if __name__ == "__main__":
             'adam'  : optim.Adam(diffusion_model_train.parameters(), lr=Init_lr, betas=(momentum, 0.999), weight_decay = weight_decay),
             'adamw' : optim.AdamW(diffusion_model_train.parameters(), lr=Init_lr, betas=(momentum, 0.999), weight_decay = weight_decay),
         }[optimizer_type]
-        
+
         #---------------------------------------#
         #   获得学习率下降的公式
         #---------------------------------------#
         lr_scheduler_func = get_lr_scheduler(lr_decay_type, Init_lr, Min_lr, Epoch)
-        
+
         #---------------------------------------#
         #   判断每一个世代的长度
         #---------------------------------------#
@@ -221,7 +221,7 @@ if __name__ == "__main__":
         #   构建数据集加载器。
         #---------------------------------------#
         train_dataset   = DiffusionDataset(lines, input_shape)
-        
+
         if distributed:
             train_sampler   = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True,)
             batch_size      = batch_size // ngpus_per_node
@@ -229,7 +229,7 @@ if __name__ == "__main__":
         else:
             train_sampler   = None
             shuffle         = True
-    
+
         gen             = DataLoader(train_dataset, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, pin_memory=True,
                                     drop_last=True, collate_fn=Diffusion_dataset_collate, sampler=train_sampler)
 
@@ -240,10 +240,10 @@ if __name__ == "__main__":
 
             if distributed:
                 train_sampler.set_epoch(epoch)
-                
+
             set_optimizer_lr(optimizer, lr_scheduler_func, epoch)
-            
-            fit_one_epoch(diffusion_model_train, diffusion_model, loss_history, optimizer, 
+
+            fit_one_epoch(diffusion_model_train, diffusion_model, loss_history, optimizer,
                         epoch, epoch_step, gen, Epoch, Cuda, fp16, scaler, save_period, save_dir, local_rank)
 
             if distributed:

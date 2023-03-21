@@ -12,7 +12,7 @@ from torch.utils.tensorboard import SummaryWriter
 class LossHistory():
     def __init__(self, log_dir, model, input_shape):
         self.log_dir    = log_dir
-        
+
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
         self.writer     = SummaryWriter(self.log_dir)
@@ -34,24 +34,24 @@ class LossHistory():
             #   为列表添加数值
             #---------------------------------#
             getattr(self, key).append(value)
-        
+
             #---------------------------------#
             #   写入txt
             #---------------------------------#
             with open(os.path.join(self.log_dir, key + ".txt"), 'a') as f:
                 f.write(str(value))
                 f.write("\n")
-                
+
             #---------------------------------#
             #   写入tensorboard
             #---------------------------------#
             self.writer.add_scalar(key, value, epoch)
-            
+
         self.loss_plot(**kwargs)
 
     def loss_plot(self, **kwargs):
         plt.figure()
-        
+
         for key, value in kwargs.items():
             losses = getattr(self, key)
             plt.plot(range(len(losses)), losses, linewidth = 2, label = key)

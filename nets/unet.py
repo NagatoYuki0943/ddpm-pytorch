@@ -16,7 +16,7 @@ def get_norm(norm, num_channels, num_groups):
         return nn.Identity()
     else:
         raise ValueError("unknown normalization type")
-    
+
 #------------------------------------------#
 #   计算时间步长的位置嵌入。
 #   一半为sin，一半为cos。
@@ -46,7 +46,7 @@ class Downsample(nn.Module):
         super().__init__()
 
         self.downsample = nn.Conv2d(in_channels, in_channels, 3, stride=2, padding=1)
-    
+
     def forward(self, x, time_emb, y):
         if x.shape[2] % 2 == 1:
             raise ValueError("downsampling tensor height should be even")
@@ -65,7 +65,7 @@ class Upsample(nn.Module):
             nn.Upsample(scale_factor=2, mode="nearest"),
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
         )
-        
+
     def forward(self, x, time_emb, y):
         return self.upsample(x)
 
@@ -76,7 +76,7 @@ class Upsample(nn.Module):
 class AttentionBlock(nn.Module):
     def __init__(self, in_channels, norm="gn", num_groups=32):
         super().__init__()
-        
+
         self.in_channels = in_channels
         self.norm = get_norm(norm, in_channels, num_groups)
         self.to_qkv = nn.Conv2d(in_channels, in_channels * 3, 1)
@@ -99,7 +99,7 @@ class AttentionBlock(nn.Module):
         out         = out.view(b, h, w, c).permute(0, 3, 1, 2)
 
         return self.to_out(out) + x
-    
+
 #------------------------------------------#
 #   用于特征提取的残差结构
 #------------------------------------------#
@@ -117,7 +117,7 @@ class ResidualBlock(nn.Module):
 
         self.norm_2 = get_norm(norm, out_channels, num_groups)
         self.conv_2 = nn.Sequential(
-            nn.Dropout(p=dropout), 
+            nn.Dropout(p=dropout),
             nn.Conv2d(out_channels, out_channels, 3, padding=1),
         )
 
@@ -126,12 +126,12 @@ class ResidualBlock(nn.Module):
 
         self.residual_connection    = nn.Conv2d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
         self.attention              = nn.Identity() if not use_attention else AttentionBlock(out_channels, norm, num_groups)
-    
+
     def forward(self, x, time_emb=None, y=None):
         out = self.activation(self.norm_1(x))
         # 第一个卷积
         out = self.conv_1(out)
-        
+
         # 对时间time_emb做一个全连接，施加在通道上
         if self.time_bias is not None:
             if time_emb is None:
@@ -168,7 +168,7 @@ class UNet(nn.Module):
         self.initial_pad = initial_pad
         # 需要去区分的类别数
         self.num_classes = num_classes
-        
+
         # 对时间轴输入的全连接层
         self.time_mlp = nn.Sequential(
             PositionalEmbedding(base_channels, time_emb_scale),
@@ -176,7 +176,7 @@ class UNet(nn.Module):
             nn.SiLU(),
             nn.Linear(time_emb_dim, time_emb_dim),
         ) if time_emb_dim is not None else None
-    
+
         # 对输入图片的第一个卷积
         self.init_conv  = nn.Conv2d(img_channels, base_channels, 3, padding=1)
 
@@ -184,7 +184,7 @@ class UNet(nn.Module):
         # 然后利用Downsample降低特征图的高宽
         self.downs      = nn.ModuleList()
         self.ups        = nn.ModuleList()
-        
+
         # channels指的是每一个模块处理后的通道数
         # now_channels是一个中间变量，代表中间的通道数
         channels        = [base_channels]
@@ -201,7 +201,7 @@ class UNet(nn.Module):
                 )
                 now_channels = out_channels
                 channels.append(now_channels)
-            
+
             if i != len(channel_mults) - 1:
                 self.downs.append(Downsample(now_channels))
                 channels.append(now_channels)
@@ -216,7 +216,7 @@ class UNet(nn.Module):
                 ),
                 ResidualBlock(
                     now_channels, now_channels, dropout,
-                    time_emb_dim=time_emb_dim, num_classes=num_classes, activation=activation, 
+                    time_emb_dim=time_emb_dim, num_classes=num_classes, activation=activation,
                     norm=norm, num_groups=num_groups, use_attention=False,
                 ),
             ]
@@ -228,20 +228,20 @@ class UNet(nn.Module):
 
             for _ in range(num_res_blocks + 1):
                 self.ups.append(ResidualBlock(
-                    channels.pop() + now_channels, out_channels, dropout, 
-                    time_emb_dim=time_emb_dim, num_classes=num_classes, activation=activation, 
+                    channels.pop() + now_channels, out_channels, dropout,
+                    time_emb_dim=time_emb_dim, num_classes=num_classes, activation=activation,
                     norm=norm, num_groups=num_groups, use_attention=i in attention_resolutions,
                 ))
                 now_channels = out_channels
-            
+
             if i != 0:
                 self.ups.append(Upsample(now_channels))
-        
+
         assert len(channels) == 0
-        
+
         self.out_norm = get_norm(norm, base_channels, num_groups)
         self.out_conv = nn.Conv2d(base_channels, img_channels, 3, padding=1)
-    
+
     def forward(self, x, time=None, y=None):
         # 是否对输入进行padding
         ip = self.initial_pad
@@ -255,10 +255,10 @@ class UNet(nn.Module):
             time_emb = self.time_mlp(time)
         else:
             time_emb = None
-        
+
         if self.num_classes is not None and y is None:
             raise ValueError("class conditioning was specified but y is not passed")
-        
+
         # 对输入图片的第一个卷积
         x = self.init_conv(x)
 
@@ -267,11 +267,11 @@ class UNet(nn.Module):
         for layer in self.downs:
             x = layer(x, time_emb, y)
             skips.append(x)
-        
+
         # 特征整合与提取
         for layer in self.mid:
             x = layer(x, time_emb, y)
-        
+
         # 上采样并进行特征融合
         for layer in self.ups:
             if isinstance(layer, ResidualBlock):
@@ -281,7 +281,7 @@ class UNet(nn.Module):
         # 上采样并进行特征融合
         x = self.activation(self.out_norm(x))
         x = self.out_conv(x)
-        
+
         if self.initial_pad != 0:
             return x[:, :, ip:-ip, ip:-ip]
         else:

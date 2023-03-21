@@ -45,8 +45,8 @@ class Diffusion(object):
     def __init__(self, **kwargs):
         self.__dict__.update(self._defaults)
         for name, value in kwargs.items():
-            setattr(self, name, value)  
-            self._defaults[name] = value 
+            setattr(self, name, value)
+            self._defaults[name] = value
         self.generate()
 
         show_config(**self._defaults)
@@ -63,7 +63,7 @@ class Diffusion(object):
                 self.schedule_low * 1000 / self.num_timesteps,
                 self.schedule_high * 1000 / self.num_timesteps,
             )
-            
+
         self.net    = GaussianDiffusion(UNet(3, self.channel), self.input_shape, 3, betas=betas)
 
         device      = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
