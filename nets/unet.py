@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class SiLU(nn.Module):  
+class SiLU(nn.Module):
     # SiLU激活函数
     @staticmethod
     def forward(x):
@@ -89,11 +89,14 @@ class AttentionBlock(nn.Module):
 
     def forward(self, x):
         b, c, h, w  = x.shape
-        q, k, v     = torch.split(self.to_qkv(self.norm(x)), self.in_channels, dim=1)
+        qkv = self.to_qkv(self.norm(x))
+        q, k, v     = torch.split(qkv, self.in_channels, dim=1)
 
-        q = q.permute(0, 2, 3, 1).view(b, h * w, c)
+        q = q.permute(0, 2, 3, 1)
+        q = q.view(b, h * w, c)
         k = k.view(b, c, h * w)
-        v = v.permute(0, 2, 3, 1).view(b, h * w, c)
+        v = v.permute(0, 2, 3, 1)
+        v = v.view(b, h * w, c)
 
         dot_products = torch.bmm(q, k) * (c ** (-0.5))
         assert dot_products.shape == (b, h * w, h * w)
@@ -101,12 +104,15 @@ class AttentionBlock(nn.Module):
         attention   = torch.softmax(dot_products, dim=-1)
         out         = torch.bmm(attention, v)
         assert out.shape == (b, h * w, c)
-        out         = out.view(b, h, w, c).permute(0, 3, 1, 2)
+
+        out         = out.view(b, h, w, c)
+        out         = out.permute(0, 3, 1, 2)
 
         return self.to_out(out) + x
 
 #------------------------------------------#
 #   用于特征提取的残差结构
+#   
 #------------------------------------------#
 class ResidualBlock(nn.Module):
     def __init__(
@@ -265,29 +271,64 @@ class UNet(nn.Module):
             raise ValueError("class conditioning was specified but y is not passed")
 
         # 对输入图片的第一个卷积
-        x = self.init_conv(x)
+        x = self.init_conv(x)           # [B, 3, 64, 64] -> [B, 128, 64, 64]
 
         # skips用于存放下采样的中间层
-        skips = [x]
+        skips = [x]                     # [[B, 128, 64, 64], [B, 256, 32, 32], [B, 512, 16, 16], [B, 512, 8, 8], [B, 1024, 8, 8]]
         for layer in self.downs:
             x = layer(x, time_emb, y)
             skips.append(x)
 
         # 特征整合与提取
         for layer in self.mid:
-            x = layer(x, time_emb, y)
+            x = layer(x, time_emb, y)   # [B, 1024, 8, 8] -> [B, 1024, 8, 8]
 
         # 上采样并进行特征融合
         for layer in self.ups:
             if isinstance(layer, ResidualBlock):
+                # pop 倒序, 从下到上拼接
                 x = torch.cat([x, skips.pop()], dim=1)
-            x = layer(x, time_emb, y)
+            x = layer(x, time_emb, y)   # [[B, 1024, 8, 8], [B, 1024, 16, 16], [B, 512, 16, 16], [B, 512, 32, 32], [B, 256, 32, 32], [B, 256, 64, 64], [B, 128, 64, 64]]
 
         # 上采样并进行特征融合
         x = self.activation(self.out_norm(x))
-        x = self.out_conv(x)
+        x = self.out_conv(x)            # [B, 128, 64, 64] -> [B, 3, 64, 64]
 
         if self.initial_pad != 0:
             return x[:, :, ip:-ip, ip:-ip]
         else:
             return x
+
+
+if __name__ == "__main__":
+    unet = UNet(3, 128)
+    unet.eval()
+
+    b = 1
+    x = torch.ones(b, 3, 64, 64)
+    num_timesteps = 1000
+    t = torch.randint(0, num_timesteps, (b,))
+    with torch.inference_mode():
+        y = unet(x, t, None)
+    print(y.size()) # [B, 3, 64, 64]
+
+    # 查看结构
+    if False:
+        onnx_path = 'ddpm-unet.onnx'
+        torch.onnx.export(unet,
+                        (x, t, None),
+                        onnx_path,
+                        input_names=['image'],
+                        output_names=['image'],
+                        )
+        import onnx
+        from onnxsim import simplify
+
+        # 载入onnx模型
+        model_ = onnx.load(onnx_path)
+
+        # 简化模型
+        model_simple, check = simplify(model_)
+        assert check, "Simplified ONNX model could not be validated"
+        onnx.save(model_simple, onnx_path)
+        print('finished exporting ' + onnx_path)

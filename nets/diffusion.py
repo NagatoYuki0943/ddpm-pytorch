@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from .unet import UNet
 from functools import partial
 from copy import deepcopy
 
@@ -28,7 +28,7 @@ class EMA():
 
 class GaussianDiffusion(nn.Module):
     def __init__(
-        self, model, img_size, img_channels, num_classes=None, betas=[], loss_type="l2", ema_decay=0.9999, ema_start=2000, ema_update_rate=1,
+        self, model: UNet, img_size, img_channels, num_classes=None, betas=[], loss_type="l2", ema_decay=0.9999, ema_start=2000, ema_update_rate=1,
     ):
         super().__init__()
         self.model      = model
@@ -84,6 +84,7 @@ class GaussianDiffusion(nn.Module):
 
     @torch.no_grad()
     def remove_noise(self, x, t, y, use_ema=True):
+        """移除噪声"""
         if use_ema:
             return (
                 (x - extract(self.remove_noise_coeff, t, x.shape) * self.ema_model(x, t, y)) *
@@ -97,9 +98,11 @@ class GaussianDiffusion(nn.Module):
 
     @torch.no_grad()
     def sample(self, batch_size, device, y=None, use_ema=True):
+        """随机生成图片,按照时间步逐步移除噪声"""
         if y is not None and batch_size != len(y):
             raise ValueError("sample batch size different from length of given y")
 
+        # 随机生成输入
         x = torch.randn(batch_size, self.img_channels, *self.img_size, device=device)
 
         for t in range(self.num_timesteps - 1, -1, -1):
@@ -113,9 +116,11 @@ class GaussianDiffusion(nn.Module):
 
     @torch.no_grad()
     def sample_diffusion_sequence(self, batch_size, device, y=None, use_ema=True):
+        """随机生成图片,按照时间步逐步移除噪声,返回生成的序列"""
         if y is not None and batch_size != len(y):
             raise ValueError("sample batch size different from length of given y")
 
+        # 随机生成输入
         x = torch.randn(batch_size, self.img_channels, *self.img_size, device=device)
         diffusion_sequence = [x.cpu().detach()]
 
