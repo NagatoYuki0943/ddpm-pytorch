@@ -110,3 +110,20 @@ class Diffusion(object):
             test_images = postprocess_output(test_images[0].cpu().data.numpy().transpose(1, 2, 0))
 
             Image.fromarray(np.uint8(test_images)).save(save_path)
+
+    #---------------------------------------------------#
+    #   Diffusion1x1的降噪顺序图片
+    #---------------------------------------------------#
+    def generate_1x1_sequence_image(self, save_path):
+        import os
+        if not os.path.exists(save_path):
+            os.makedirs(save_path, exist_ok=True)
+
+        with torch.no_grad():
+            randn_in           = torch.randn((1, 1)).cuda() if self.cuda else torch.randn((1, 1))
+
+            diffusion_sequence = self.net.sample_diffusion_sequence(1, randn_in.device, use_ema=False)
+            for i, test_images in enumerate(diffusion_sequence):
+                test_images    = postprocess_output(test_images[0].cpu().data.numpy().transpose(1, 2, 0))
+
+                Image.fromarray(np.uint8(test_images)).save(os.path.join(save_path, f"{i}.png"))
