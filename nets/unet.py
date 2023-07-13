@@ -254,6 +254,10 @@ class UNet(nn.Module):
         self.out_conv = nn.Conv2d(base_channels, img_channels, 3, padding=1)
 
     def forward(self, x, time=None, y=None):
+        # x: [B, 3, 64, 64]
+        # time: [1] 代表时序
+        # y: None
+
         # 是否对输入进行padding
         ip = self.initial_pad
         if ip != 0:
