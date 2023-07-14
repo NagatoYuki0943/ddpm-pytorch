@@ -33,14 +33,14 @@ class PositionalEmbedding(nn.Module):
         self.dim = dim
         self.scale = scale
 
-    def forward(self, x):
+    def forward(self, x):   # [1]
         device      = x.device
-        half_dim    = self.dim // 2
-        emb = math.log(10000) / half_dim
-        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)
+        half_dim    = self.dim // 2                                     # 64 = 128 /2
+        emb = math.log(10000) / half_dim                                # 0.14391156831212787
+        emb = torch.exp(torch.arange(half_dim, device=device) * -emb)   # [64]
         # x * self.scale和emb外积
-        emb = torch.outer(x * self.scale, emb)
-        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)
+        emb = torch.outer(x * self.scale, emb)                          # [B] x [64] = [B, 64]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=-1)                 # [B, 64] cat [B, 64] = [B, 128]
         return emb
 
 #------------------------------------------#
@@ -77,6 +77,7 @@ class Upsample(nn.Module):
 #------------------------------------------#
 #   使用Self-Attention注意力机制
 #   做一个全局的Self-Attention
+#   没用多头
 #------------------------------------------#
 class AttentionBlock(nn.Module):
     def __init__(self, in_channels, norm="gn", num_groups=32):
@@ -89,30 +90,50 @@ class AttentionBlock(nn.Module):
 
     def forward(self, x):
         b, c, h, w  = x.shape
-        qkv = self.to_qkv(self.norm(x))
-        q, k, v     = torch.split(qkv, self.in_channels, dim=1)
+        qkv         = self.to_qkv(self.norm(x))                 # [B, C, H, W] => [B, 3 * C, H, W]
+        q, k, v     = torch.split(qkv, self.in_channels, dim=1) # [B, 3 * C, H, W] => 3 * [B, C, H, W]
 
-        q = q.permute(0, 2, 3, 1)
-        q = q.view(b, h * w, c)
-        k = k.view(b, c, h * w)
-        v = v.permute(0, 2, 3, 1)
-        v = v.view(b, h * w, c)
+        q = q.permute(0, 2, 3, 1)   # [B, C, H, W] => [B, H, W, C]
+        q = q.view(b, h * w, c)     # [B, H, W, C] => [B, H*W, C]
+        k = k.view(b, c, h * w)     # [B, C, H, W] => [B, C, H*W]
+        v = v.permute(0, 2, 3, 1)   # [B, C, H, W] => [B, H, W, C]
+        v = v.view(b, h * w, c)     # [B, H, W, C] => [B, H*W, C]
 
-        dot_products = torch.bmm(q, k) * (c ** (-0.5))
+        dot_products = torch.bmm(q, k) * (c ** (-0.5))      # [B, H*W, C] @ [B, C, H*W] = [B, H*W, H*W]
         assert dot_products.shape == (b, h * w, h * w)
 
         attention   = torch.softmax(dot_products, dim=-1)
-        out         = torch.bmm(attention, v)
+        out         = torch.bmm(attention, v)               # [B, H*W, H*W] @ [B, H*W, C] = [B, H*W, C]
         assert out.shape == (b, h * w, c)
 
-        out         = out.view(b, h, w, c)
-        out         = out.permute(0, 3, 1, 2)
+        out         = out.view(b, h, w, c)      # [B, H*W, C] => [B, H, W, C]
+        out         = out.permute(0, 3, 1, 2)   # [B, H, W, C] => [B, C, H, W]
 
         return self.to_out(out) + x
 
 #------------------------------------------#
 #   用于特征提取的残差结构
-#   
+#
+#                  in
+#                   │
+#          ┌────────┴────────┐
+#        norm_1              │
+#          │                 │
+#      activation            │
+#          │                 │
+#      conv_1(3x3)           │
+#          │       residual_connection(1x1)
+#        norm_2              │
+#          │                 │
+#      activation            │
+#          │                 │
+#      conv_2(3x3)           │
+#          │                 │
+#          └─────── + ───────┘
+#                   │
+#               attention
+#                   │
+#                  out
 #------------------------------------------#
 class ResidualBlock(nn.Module):
     def __init__(
@@ -141,13 +162,13 @@ class ResidualBlock(nn.Module):
     def forward(self, x, time_emb=None, y=None):
         out = self.activation(self.norm_1(x))
         # 第一个卷积
-        out = self.conv_1(out)
+        out = self.conv_1(out) # [B, 128, 64, 64] => [B, 128, 64, 64]
 
         # 对时间time_emb做一个全连接，施加在通道上
         if self.time_bias is not None:
             if time_emb is None:
                 raise ValueError("time conditioning was specified but time_emb is not passed")
-            out += self.time_bias(self.activation(time_emb))[:, :, None, None]
+            out += self.time_bias(self.activation(time_emb))[:, :, None, None] # [B, 512] => [B, 128] => [B, 128, 1, 1] + [B, 128, 64, 64] = [B, 128, 64, 64]
 
         # 对种类y_emb做一个全连接，施加在通道上
         if self.class_bias is not None:
@@ -168,9 +189,20 @@ class ResidualBlock(nn.Module):
 #------------------------------------------#
 class UNet(nn.Module):
     def __init__(
-        self, img_channels, base_channels=128, channel_mults=(1, 2, 4, 8),
-        num_res_blocks=3, time_emb_dim=128 * 4, time_emb_scale=1.0, num_classes=None, activation=SiLU(),
-        dropout=0.1, attention_resolutions=(1,), norm="gn", num_groups=32, initial_pad=0,
+        self,
+        img_channels,
+        base_channels=128,
+        channel_mults=(1, 2, 4, 8), # 每个stage的channel倍率,3次下采样
+        num_res_blocks=3,           # 每个stage重复res_block次数
+        time_emb_dim=128 * 4,
+        time_emb_scale=1.0,
+        num_classes=None,
+        activation=SiLU(),
+        dropout=0.1,
+        attention_resolutions=(1,),
+        norm="gn",
+        num_groups=32,
+        initial_pad=0,
     ):
         super().__init__()
         # 使用到的激活函数，一般为SILU
@@ -180,7 +212,10 @@ class UNet(nn.Module):
         # 需要去区分的类别数
         self.num_classes = num_classes
 
-        # 对时间轴输入的全连接层
+        #-----------------------------------------#
+        #   对时间轴输入的全连接层
+        #   [B] => [B, 128] => [B, 512] => [B, 512]
+        #-----------------------------------------#
         self.time_mlp = nn.Sequential(
             PositionalEmbedding(base_channels, time_emb_scale),
             nn.Linear(base_channels, time_emb_dim),
@@ -188,21 +223,28 @@ class UNet(nn.Module):
             nn.Linear(time_emb_dim, time_emb_dim),
         ) if time_emb_dim is not None else None
 
-        # 对输入图片的第一个卷积
+        #-----------------------------------------#
+        #   对输入图片的第一个卷积
+        #-----------------------------------------#
         self.init_conv  = nn.Conv2d(img_channels, base_channels, 3, padding=1)
 
-        # self.downs用于存储下采样用到的层，首先利用ResidualBlock提取特征
-        # 然后利用Downsample降低特征图的高宽
+        #-----------------------------------------#
+        #   self.downs用于存储下采样用到的层，首先利用ResidualBlock提取特征
+        #   然后利用Downsample降低特征图的高宽
+        #-----------------------------------------#
         self.downs      = nn.ModuleList()
         self.ups        = nn.ModuleList()
 
-        # channels指的是每一个模块处理后的通道数
-        # now_channels是一个中间变量，代表中间的通道数
+        #-----------------------------------------#
+        #   下采样
+        #   channels 指的是每一个模块处理后的通道数
+        #   now_channels 是一个中间变量，代表中间的通道数
+        #-----------------------------------------#
         channels        = [base_channels]
         now_channels    = base_channels
-        for i, mult in enumerate(channel_mults):
+        for i, mult in enumerate(channel_mults):    # 生成下采样stage   [(0, 1), (1, 2), (2, 4), (3, 8)]
             out_channels = base_channels * mult
-            for _ in range(num_res_blocks):
+            for _ in range(num_res_blocks):         # 重复res_block
                 self.downs.append(
                     ResidualBlock(
                         now_channels, out_channels, dropout,
@@ -213,11 +255,13 @@ class UNet(nn.Module):
                 now_channels = out_channels
                 channels.append(now_channels)
 
-            if i != len(channel_mults) - 1:
+            if i != len(channel_mults) - 1:         # 最后一个stage不用下采样,一共3次上采样
                 self.downs.append(Downsample(now_channels))
                 channels.append(now_channels)
 
-        # 可以看作是特征整合，中间的一个特征提取模块
+        #-----------------------------------------#
+        #   可以看作是特征整合，中间的一个特征提取模块
+        #-----------------------------------------#
         self.mid = nn.ModuleList(
             [
                 ResidualBlock(
@@ -233,11 +277,13 @@ class UNet(nn.Module):
             ]
         )
 
-        # 进行上采样，进行特征融合
-        for i, mult in reversed(list(enumerate(channel_mults))):
+        #-----------------------------------------#
+        #   进行上采样，进行特征融合, 先融合再上采样
+        #-----------------------------------------#
+        for i, mult in reversed(list(enumerate(channel_mults))):    # 生成上采样stage   [(3, 8), (2, 4), (1, 2), (0, 1)]
             out_channels = base_channels * mult
 
-            for _ in range(num_res_blocks + 1):
+            for _ in range(num_res_blocks + 1):                     # 重复res_block
                 self.ups.append(ResidualBlock(
                     channels.pop() + now_channels, out_channels, dropout,
                     time_emb_dim=time_emb_dim, num_classes=num_classes, activation=activation,
@@ -245,7 +291,7 @@ class UNet(nn.Module):
                 ))
                 now_channels = out_channels
 
-            if i != 0:
+            if i != 0:                                              # 最后一个stage不需要上采样,一共3次上采样
                 self.ups.append(Upsample(now_channels))
 
         assert len(channels) == 0
@@ -263,40 +309,53 @@ class UNet(nn.Module):
         if ip != 0:
             x = F.pad(x, (ip,) * 4)
 
-        # 对时间轴输入的全连接层
+        #-----------------------------------------#
+        #   对时间轴输入的全连接层
+        #-----------------------------------------#
         if self.time_mlp is not None:
             if time is None:
                 raise ValueError("time conditioning was specified but tim is not passed")
-            time_emb = self.time_mlp(time)
+            time_emb = self.time_mlp(time)  # [B] => [B, 128] => [B, 512] => [B, 512]
         else:
             time_emb = None
 
         if self.num_classes is not None and y is None:
             raise ValueError("class conditioning was specified but y is not passed")
 
-        # 对输入图片的第一个卷积
-        x = self.init_conv(x)           # [B, 3, 64, 64] -> [B, 128, 64, 64]
+        #-----------------------------------------#
+        #   对输入图片的第一个卷积
+        #-----------------------------------------#
+        x = self.init_conv(x)           # [B, 3, 64, 64] => [B, 128, 64, 64]
 
-        # skips用于存放下采样的中间层
-        skips = [x]                     # [[B, 128, 64, 64], [B, 256, 32, 32], [B, 512, 16, 16], [B, 512, 8, 8], [B, 1024, 8, 8]]
+        #-----------------------------------------#
+        #   skips用于存放下采样的中间层
+        #   存放的结果包含了所有的res_block和downsample的输出
+        #-----------------------------------------#
+        skips = [x]                     # [[B, 128, 64, 64]， [B, 128, 32, 32], [B, 256, 32, 32],  [B, 256, 16, 16], [B, 512, 16, 16], [B, 512, 8, 8], [B, 1024, 8, 8]]
         for layer in self.downs:
             x = layer(x, time_emb, y)
             skips.append(x)
 
-        # 特征整合与提取
+        #-----------------------------------------#
+        #   特征整合与提取
+        #-----------------------------------------#
         for layer in self.mid:
-            x = layer(x, time_emb, y)   # [B, 1024, 8, 8] -> [B, 1024, 8, 8]
+            x = layer(x, time_emb, y)   # [B, 1024, 8, 8] => [B, 1024, 8, 8]
 
-        # 上采样并进行特征融合
+        #-----------------------------------------#
+        #   上采样并进行特征融合
+        #-----------------------------------------#
         for layer in self.ups:
-            if isinstance(layer, ResidualBlock):
+            if isinstance(layer, ResidualBlock): # 上采样层不拼接
                 # pop 倒序, 从下到上拼接
                 x = torch.cat([x, skips.pop()], dim=1)
             x = layer(x, time_emb, y)   # [[B, 1024, 8, 8], [B, 1024, 16, 16], [B, 512, 16, 16], [B, 512, 32, 32], [B, 256, 32, 32], [B, 256, 64, 64], [B, 128, 64, 64]]
 
-        # 上采样并进行特征融合
+        #-----------------------------------------#
+        #   最终输出
+        #-----------------------------------------#
         x = self.activation(self.out_norm(x))
-        x = self.out_conv(x)            # [B, 128, 64, 64] -> [B, 3, 64, 64]
+        x = self.out_conv(x)            # [B, 128, 64, 64] => [B, 3, 64, 64]
 
         if self.initial_pad != 0:
             return x[:, :, ip:-ip, ip:-ip]
@@ -305,7 +364,7 @@ class UNet(nn.Module):
 
 
 if __name__ == "__main__":
-    unet = UNet(3, 128)
+    unet = UNet(img_channels = 3, base_channels = 128)
     unet.eval()
 
     b = 1
